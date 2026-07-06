@@ -1,0 +1,14 @@
+﻿当前状态：你已经把同步包上传到 GitHub，但位置不对。仓库根目录有 DailyStock_GitHub同步文件 和 zip，正确代码还没有落到 scripts/.github/data_provider/src 等目录。
+
+修复方式：
+1. 打开 GitHub 仓库。
+2. 进入 .github/workflows 目录。
+3. 点击 Add file -> Upload files。
+4. 上传桌面文件：C:\Users\stays\Desktop\DailyStock_上传此文件到GitHub修复.yml
+5. 上传后在文件名处改名为：99-sync-uploaded-package.yml
+   如果 GitHub 不让改名，就先提交，之后我再检查；核心是这个文件要放到 .github/workflows 目录里。
+6. 选择 Commit directly to the main branch。
+7. 提交后 Actions 会自动运行 Sync Uploaded DailyStock Package。
+8. 运行成功后，它会把 zip 解压到正确位置，并删除根目录的同步包、zip 和自己。
+
+完成后告诉 Codex，我继续检查远端文件与 Actions。
