@@ -12,6 +12,7 @@ A股自选股智能分析系统 - 核心分析流水线
 """
 
 import logging
+import os
 import threading
 import time
 import uuid
@@ -3030,6 +3031,19 @@ class StockAnalysisPipeline:
         fallback_code: Optional[str] = None,
     ) -> None:
         """发送单股通知，供直接单股入口和批量串行推送共用。"""
+        should_send, skip_reason = self._should_send_single_stock_notification(result)
+        if not should_send:
+            stock_code = getattr(result, "code", None) or fallback_code or "unknown"
+            logger.info(
+                "[%s] 单股推送跳过：%s；评分=%s，动作=%s，建议=%s",
+                stock_code,
+                skip_reason,
+                getattr(result, "sentiment_score", None),
+                getattr(result, "action", None),
+                getattr(result, "operation_advice", None),
+            )
+            return
+
         if not self.notifier.is_available():
             notification_run = self._build_notification_run_snapshot(
                 channel="report",
@@ -3117,6 +3131,58 @@ class StockAnalysisPipeline:
                     notification_run=notification_run,
                 )
                 logger.error(f"[{stock_code}] 单股推送异常: {e}")
+
+    def _should_send_single_stock_notification(self, result: AnalysisResult) -> Tuple[bool, str]:
+        """Decide whether an analyzed stock deserves a DingTalk single-stock push."""
+        mode = (os.getenv("SINGLE_STOCK_NOTIFY_FILTER") or "all").strip().lower()
+        if mode in {"", "all", "off", "false", "none"}:
+            return True, "未启用重点筛选"
+
+        if mode not in {"important", "action", "signal"}:
+            logger.warning("未知 SINGLE_STOCK_NOTIFY_FILTER=%r，按 important 处理", mode)
+
+        action_text = " ".join(
+            str(part or "").strip().lower()
+            for part in (
+                getattr(result, "action", None),
+                getattr(result, "action_label", None),
+                getattr(result, "decision_type", None),
+                getattr(result, "operation_advice", None),
+            )
+            if str(part or "").strip()
+        )
+        raw_actions = os.getenv(
+            "SINGLE_STOCK_NOTIFY_ACTIONS",
+            "buy,add,reduce,sell,alert,avoid,买入,加仓,减仓,卖出,预警,规避",
+        )
+        normalized_actions = (
+            raw_actions
+            .replace("，", ",")
+            .replace("、", ",")
+            .replace("；", ",")
+            .replace(";", ",")
+        )
+        important_actions = [
+            item.strip().lower()
+            for item in normalized_actions.split(",")
+            if item.strip()
+        ]
+        if any(action in action_text for action in important_actions):
+            return True, "触发动作类重点信号"
+
+        threshold_raw = os.getenv("SINGLE_STOCK_NOTIFY_SCORE_THRESHOLD", "65").strip()
+        try:
+            score_threshold = int(threshold_raw)
+        except ValueError:
+            score_threshold = 65
+        try:
+            score = int(getattr(result, "sentiment_score", 0) or 0)
+        except (TypeError, ValueError):
+            score = 0
+        if score >= score_threshold:
+            return True, f"评分达到重点阈值 {score_threshold}"
+
+        return False, "未达到重点推送条件"
 
     def _save_local_report(
         self,

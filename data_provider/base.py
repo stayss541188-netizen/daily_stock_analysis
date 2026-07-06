@@ -624,6 +624,7 @@ class DataFetcherManager:
         "LongbridgeFetcher": {"hk", "us"},
         "FinnhubFetcher": {"us"},
         "AlphaVantageFetcher": {"us"},
+        "YunaiFetcher": {"cn", "hk", "us"},
     }
     _daily_source_health = CircuitBreaker(failure_threshold=3, cooldown_seconds=300.0)
     _CONCEPT_RANKINGS_CACHE_TTL_SECONDS = 300.0
@@ -1161,6 +1162,7 @@ class DataFetcherManager:
         from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
         from .longbridge_fetcher import LongbridgeFetcher
+        from .yunai_fetcher import YunaiFetcher
         config = get_config()
         # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
         efinance = EfinanceFetcher()
@@ -1195,6 +1197,11 @@ class DataFetcherManager:
             optional_fetchers.append(LongbridgeFetcher())  # 长桥（美股/港股兜底，懒加载）
         else:
             logger.debug("[数据源初始化] 跳过未配置的 LongbridgeFetcher")
+
+        if YunaiFetcher.has_configured_credentials(config):
+            optional_fetchers.append(YunaiFetcher())
+        else:
+            logger.debug("[数据源初始化] 跳过未配置的 YunaiFetcher")
 
         finnhub_api_key = (getattr(config, "finnhub_api_key", None) or "").strip()
         if finnhub_api_key:
@@ -1680,6 +1687,7 @@ class DataFetcherManager:
             "AkshareFetcher": "akshare",
             "FinnhubFetcher": "finnhub",
             "AlphaVantageFetcher": "alphavantage",
+            "YunaiFetcher": "yunai",
             "EfinanceFetcher": "efinance",
             "TushareFetcher": "tushare",
         }
@@ -1804,7 +1812,7 @@ class DataFetcherManager:
             )
             # 美股个股（非指数）尝试从 Finnhub/AlphaVantage 补充缺失字段
             if is_us and not is_us_index and primary_quote is not None:
-                for extra_src in ["FinnhubFetcher", "AlphaVantageFetcher"]:
+                for extra_src in ["YunaiFetcher", "FinnhubFetcher", "AlphaVantageFetcher"]:
                     primary_quote = self._supplement_quote(
                         stock_code, primary_quote, extra_src,
                     )
@@ -1891,6 +1899,16 @@ class DataFetcherManager:
 
                 elif source == "tickflow":
                     fetcher = self._get_fetcher_by_name("TickFlowFetcher", capability="realtime_quote")
+                    if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
+                        record_provider_run_started(
+                            data_type="realtime_quote",
+                            provider=fetcher.name,
+                            operation="get_realtime_quote",
+                        )
+                        quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', raw_stock_code or stock_code)
+
+                elif source == "yunai":
+                    fetcher = self._get_fetcher_by_name("YunaiFetcher", capability="realtime_quote")
                     if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
                         record_provider_run_started(
                             data_type="realtime_quote",

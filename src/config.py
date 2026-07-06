@@ -724,6 +724,8 @@ class Config:
     tickflow_priority: int = 2
     tickflow_batch_daily_enabled: bool = True
     tickflow_batch_size: int = 100
+    yunai_authorization: Optional[str] = None
+    yunai_base_url: str = "https://quant.yunai.com.cn/quant-market"
     finnhub_api_key: Optional[str] = None
     alphavantage_api_key: Optional[str] = None
     longbridge_app_key: Optional[str] = None
@@ -1037,7 +1039,7 @@ class Config:
     # 东财接口补丁开关
     enable_eastmoney_patch: bool = False
     # 实时行情数据源优先级（逗号分隔）
-    # 推荐顺序：tencent > akshare_sina > efinance > akshare_em > tushare
+    # 推荐顺序：yunai/tickflow/tushare(配置时自动置前) > tencent > akshare_sina > efinance > akshare_em
     # - tencent: 腾讯财经，有量比/换手率/市盈率等，单股查询稳定（推荐）
     # - akshare_sina: 新浪财经，基本行情稳定，但无量比
     # - efinance/akshare_em: 东财全量接口，数据最全但容易被封
@@ -1619,6 +1621,8 @@ class Config:
             tickflow_priority=parse_env_int(os.getenv('TICKFLOW_PRIORITY'), 2, field_name='TICKFLOW_PRIORITY', minimum=0),
             tickflow_batch_daily_enabled=parse_env_bool(os.getenv('TICKFLOW_BATCH_DAILY_ENABLED'), default=True),
             tickflow_batch_size=parse_env_int(os.getenv('TICKFLOW_BATCH_SIZE'), 100, field_name='TICKFLOW_BATCH_SIZE', minimum=1),
+            yunai_authorization=os.getenv('YUNAI_AUTHORIZATION') or os.getenv('YUNAI_API_KEY') or None,
+            yunai_base_url=(os.getenv('YUNAI_BASE_URL') or 'https://quant.yunai.com.cn/quant-market').rstrip('/'),
             finnhub_api_key=os.getenv('FINNHUB_API_KEY') or None,
             alphavantage_api_key=os.getenv('ALPHAVANTAGE_API_KEY') or None,
             longbridge_app_key=os.getenv('LONGBRIDGE_APP_KEY') or None,
@@ -2612,28 +2616,44 @@ class Config:
     @classmethod
     def _resolve_realtime_source_priority(cls) -> str:
         """
-        Resolve realtime source priority with automatic tushare injection.
+        Resolve realtime source priority with paid/API-source auto injection.
 
-        When TUSHARE_TOKEN is configured but REALTIME_SOURCE_PRIORITY is not
-        explicitly set, automatically prepend 'tushare' to the default priority
-        so that the paid data source is utilized for realtime quotes as well.
+        When YunAI/TickFlow/Tushare credentials are configured but
+        REALTIME_SOURCE_PRIORITY is not explicitly set, automatically prepend
+        those sources to the default priority so the configured API source is
+        actually used by GitHub Actions and other non-interactive runs.
         """
         explicit = os.getenv('REALTIME_SOURCE_PRIORITY')
         default_priority = 'tencent,akshare_sina,efinance,akshare_em'
 
-        if explicit:
+        if explicit and explicit.strip():
             # User explicitly set priority, respect it
             return explicit
 
+        paid_sources: List[str] = []
+        yunai_authorization = (
+            os.getenv('YUNAI_AUTHORIZATION', '').strip()
+            or os.getenv('YUNAI_API_KEY', '').strip()
+        )
+        if yunai_authorization:
+            paid_sources.append('yunai')
+
+        tickflow_api_key = os.getenv('TICKFLOW_API_KEY', '').strip()
+        if tickflow_api_key:
+            paid_sources.append('tickflow')
+
         tushare_token = os.getenv('TUSHARE_TOKEN', '').strip()
         if tushare_token:
-            # Token configured but no explicit priority override
-            # Prepend tushare so the paid source is tried first
+            paid_sources.append('tushare')
+
+        if paid_sources:
+            base_sources = [source for source in default_priority.split(',') if source not in paid_sources]
+            resolved = ','.join([*paid_sources, *base_sources])
             import logging
             logger = logging.getLogger(__name__)
-            resolved = f'tushare,{default_priority}'
             logger.info(
-                f"TUSHARE_TOKEN detected, auto-injecting tushare into realtime priority: {resolved}"
+                "Configured API data source detected, auto-injecting realtime priority: %s",
+                resolved,
             )
             return resolved
 
