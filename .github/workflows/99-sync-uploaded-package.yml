@@ -1,4 +1,4 @@
-﻿name: Sync Uploaded DailyStock Package
+name: Sync Uploaded DailyStock Package
 
 on:
   push:
@@ -33,9 +33,33 @@ jobs:
             exit 1
           fi
           rm -rf _dailystock_sync
-          mkdir -p _dailystock_sync
-          unzip -q "DailyStock_GitHub同步文件.zip" -d _dailystock_sync
-          find _dailystock_sync -maxdepth 3 -type f | sort
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          source = Path("DailyStock_GitHub同步文件.zip")
+          dest = Path("_dailystock_sync")
+          dest.mkdir(parents=True, exist_ok=True)
+
+          with ZipFile(source) as archive:
+              for item in archive.infolist():
+                  normalized = item.filename.replace("\\", "/")
+                  parts = [
+                      part
+                      for part in normalized.split("/")
+                      if part and part not in {".", ".."}
+                  ]
+                  if not parts:
+                      continue
+                  target = dest.joinpath(*parts)
+                  if item.is_dir():
+                      target.mkdir(parents=True, exist_ok=True)
+                      continue
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  with archive.open(item) as src, target.open("wb") as out:
+                      out.write(src.read())
+          PY
+          find _dailystock_sync -maxdepth 4 -type f | sort
 
       - name: Copy files to repository root
         run: |
