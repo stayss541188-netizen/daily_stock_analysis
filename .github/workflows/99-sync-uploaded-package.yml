@@ -1,0 +1,60 @@
+﻿name: Sync Uploaded DailyStock Package
+
+on:
+  push:
+    paths:
+      - '.github/workflows/99-sync-uploaded-package.yml'
+      - 'DailyStock_GitHub同步文件.zip'
+      - 'DailyStock_GitHub同步文件/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-uploaded-dailystock-package
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Unpack uploaded package
+        run: |
+          set -euo pipefail
+          if [ ! -f "DailyStock_GitHub同步文件.zip" ]; then
+            echo "Missing DailyStock_GitHub同步文件.zip"
+            exit 1
+          fi
+          rm -rf _dailystock_sync
+          mkdir -p _dailystock_sync
+          unzip -q "DailyStock_GitHub同步文件.zip" -d _dailystock_sync
+          find _dailystock_sync -maxdepth 3 -type f | sort
+
+      - name: Copy files to repository root
+        run: |
+          set -euo pipefail
+          cp -a _dailystock_sync/. ./
+          rm -rf _dailystock_sync
+          rm -rf "DailyStock_GitHub同步文件" "DailyStock_GitHub同步文件.zip"
+          rm -f .github/workflows/99-sync-uploaded-package.yml
+          rm -f .github/workflows/99-sync-uploaded-package.yml.txt
+
+      - name: Commit synced files
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: sync DailyStock desktop package"
+          git push
