@@ -64,11 +64,10 @@ jobs:
       - name: Copy files to repository root
         run: |
           set -euo pipefail
+          rm -rf _dailystock_sync/.github
           cp -a _dailystock_sync/. ./
           rm -rf _dailystock_sync
           rm -rf "DailyStock_GitHub同步文件" "DailyStock_GitHub同步文件.zip"
-          rm -f .github/workflows/99-sync-uploaded-package.yml
-          rm -f .github/workflows/99-sync-uploaded-package.yml.txt
 
       - name: Commit synced files
         run: |
