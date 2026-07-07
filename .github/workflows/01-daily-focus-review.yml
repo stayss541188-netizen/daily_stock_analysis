@@ -114,6 +114,11 @@ jobs:
           AI_ARG="--run-ai"
           FORCE_ARG=""
 
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            MARKET_ARG=""
+            AI_ARG=""
+          fi
+
           if [ "${{ github.event.inputs.push }}" = "false" ]; then
             PUSH_ARG=""
           fi

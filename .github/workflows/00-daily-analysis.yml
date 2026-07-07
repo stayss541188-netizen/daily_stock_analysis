@@ -17,11 +17,17 @@ on:
           - full          # 完整分析（股票+大盘）
           - market-only   # 仅大盘复盘
           - stocks-only   # 仅股票分析
+          - test-notify   # 仅发送通知测试
       force_run:
         description: '强制运行（跳过交易日检查）'
         required: false
         default: false
         type: boolean
+      test_stock:
+        description: '测试推送股票代码（仅 test-notify 模式使用）'
+        required: false
+        default: '600519'
+        type: string
 
 # 并发控制：同一时间只运行一个分析任务
 concurrency:
@@ -35,7 +41,7 @@ jobs:
     # 推荐位置仍是 Settings -> Secrets and variables -> Actions -> Repository variables。
     environment: STOCK_LIST
     # 添加超时限制，防止任务卡死
-    timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '30') }}
+    timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '60') }}
     
     steps:
       - name: 随机延迟（避免固定时间访问）
@@ -260,6 +266,13 @@ jobs:
           TICKFLOW_KLINE_ADJUST: ${{ vars.TICKFLOW_KLINE_ADJUST || secrets.TICKFLOW_KLINE_ADJUST }}
           TICKFLOW_BATCH_DAILY_ENABLED: ${{ vars.TICKFLOW_BATCH_DAILY_ENABLED || secrets.TICKFLOW_BATCH_DAILY_ENABLED }}
           TICKFLOW_BATCH_SIZE: ${{ vars.TICKFLOW_BATCH_SIZE || secrets.TICKFLOW_BATCH_SIZE }}
+          # YunAI Quant market data. Configure either YUNAI_AUTHORIZATION or YUNAI_API_KEY as a GitHub Secret.
+          YUNAI_AUTHORIZATION: ${{ secrets.YUNAI_AUTHORIZATION || secrets.YUNAI_API_KEY }}
+          YUNAI_BASE_URL: ${{ vars.YUNAI_BASE_URL || secrets.YUNAI_BASE_URL }}
+          YUNAI_PRIORITY: ${{ vars.YUNAI_PRIORITY || secrets.YUNAI_PRIORITY }}
+          # 美股 API 兜底源（代码已支持；未配置时自动跳过）
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
           # Longbridge OpenAPI（美股/港股实时行情字段补充；不设则仅 YFinance/AkShare，无 [Longbridge] 调用）
           LONGBRIDGE_OAUTH_CLIENT_ID: ${{ vars.LONGBRIDGE_OAUTH_CLIENT_ID || secrets.LONGBRIDGE_OAUTH_CLIENT_ID }}
           LONGBRIDGE_OAUTH_TOKEN_CACHE_B64: ${{ secrets.LONGBRIDGE_OAUTH_TOKEN_CACHE_B64 }}
@@ -389,9 +402,20 @@ jobs:
           REPORT_LANGUAGE: ${{ vars.REPORT_LANGUAGE || secrets.REPORT_LANGUAGE || '' }}
           REPORT_SHOW_LLM_MODEL: ${{ vars.REPORT_SHOW_LLM_MODEL || secrets.REPORT_SHOW_LLM_MODEL || 'true' }}
           SINGLE_STOCK_NOTIFY: ${{ vars.SINGLE_STOCK_NOTIFY || secrets.SINGLE_STOCK_NOTIFY || 'false' }}
+          SINGLE_STOCK_NOTIFY_FILTER: ${{ vars.SINGLE_STOCK_NOTIFY_FILTER || secrets.SINGLE_STOCK_NOTIFY_FILTER || 'important' }}
+          SINGLE_STOCK_NOTIFY_SCORE_THRESHOLD: ${{ vars.SINGLE_STOCK_NOTIFY_SCORE_THRESHOLD || secrets.SINGLE_STOCK_NOTIFY_SCORE_THRESHOLD || '65' }}
           MARKET_REVIEW_ENABLED: ${{ vars.MARKET_REVIEW_ENABLED || secrets.MARKET_REVIEW_ENABLED || 'true' }}
           ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}
           TRADING_DAY_CHECK_ENABLED: ${{ vars.TRADING_DAY_CHECK_ENABLED || secrets.TRADING_DAY_CHECK_ENABLED || 'true' }}
+          BACKTEST_ENABLED: ${{ vars.BACKTEST_ENABLED || secrets.BACKTEST_ENABLED || 'false' }}
+          AGENT_SKILL_AUTOWEIGHT: ${{ vars.AGENT_SKILL_AUTOWEIGHT || secrets.AGENT_SKILL_AUTOWEIGHT || 'false' }}
+          FOCUS_MAX_STOCKS: ${{ vars.FOCUS_MAX_STOCKS || secrets.FOCUS_MAX_STOCKS || '8' }}
+          FOCUS_TOP_THEMES: ${{ vars.FOCUS_TOP_THEMES || secrets.FOCUS_TOP_THEMES || '5' }}
+          FOCUS_BATCH_SIZE: ${{ vars.FOCUS_BATCH_SIZE || secrets.FOCUS_BATCH_SIZE || '50' }}
+          FOCUS_MIN_CHANGE_PCT: ${{ vars.FOCUS_MIN_CHANGE_PCT || secrets.FOCUS_MIN_CHANGE_PCT || '2.0' }}
+          FOCUS_MIN_ABS_CHANGE_PCT: ${{ vars.FOCUS_MIN_ABS_CHANGE_PCT || secrets.FOCUS_MIN_ABS_CHANGE_PCT || '3.0' }}
+          FOCUS_MIN_VOLUME_RATIO: ${{ vars.FOCUS_MIN_VOLUME_RATIO || secrets.FOCUS_MIN_VOLUME_RATIO || '1.5' }}
+          FOCUS_REQUIRE_FRESH: ${{ vars.FOCUS_REQUIRE_FRESH || secrets.FOCUS_REQUIRE_FRESH || 'true' }}
           
           # ==========================================
           # 系统配置
@@ -401,9 +425,9 @@ jobs:
           # 筹码分布：默认 false（云端接口不稳定）；需启用时在 Settings → Variables 添加 ENABLE_CHIP_DISTRIBUTION=true
           ENABLE_CHIP_DISTRIBUTION: ${{ vars.ENABLE_CHIP_DISTRIBUTION || secrets.ENABLE_CHIP_DISTRIBUTION || 'false' }}
           # 实时行情数据源优先级（腾讯有量比且稳定，推荐首选）
-          # 可选值: tencent, akshare_sina, efinance, akshare_em, tickflow, tushare
+          # 可选值: tencent, akshare_sina, efinance, akshare_em, yunai, tickflow, tushare
           # 如果有 TickFlow 或 Tushare Pro，可按权限把 tickflow / tushare 放在更靠前位置
-          REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tencent,akshare_sina,efinance,akshare_em' }}
+          REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || secrets.REALTIME_SOURCE_PRIORITY }}
           
         run: |
           # 解析自选股配置：
@@ -414,6 +438,22 @@ jobs:
             export STOCK_LIST="$STOCK_LIST_CONFIG"
           elif [ -z "${STOCK_LIST:-}" ]; then
             export STOCK_LIST="600519"
+          fi
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo ""
+            echo "=========================================="
+            echo "📌 先发送收盘重点筛选摘要"
+            echo "=========================================="
+            set +e
+            python scripts/daily_focus_review.py --push
+            FOCUS_EXIT=$?
+            set -e
+            if [ "$FOCUS_EXIT" -ne 0 ]; then
+              echo "::warning::收盘重点筛选提前推送失败，继续执行原每日股票分析。"
+            fi
+            echo "=========================================="
+            echo ""
           fi
 
           # 处理 LITELLM YAML 配置文件
@@ -456,6 +496,10 @@ jobs:
           echo "【数据源】"
           echo "  Tushare Token: $([ -n "$TUSHARE_TOKEN" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "  TickFlow:      $([ -n "$TICKFLOW_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
+          echo "  YunAI:         $([ -n "$YUNAI_AUTHORIZATION" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
+          echo "  Finnhub:       $([ -n "$FINNHUB_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
+          echo "  AlphaVantage:  $([ -n "$ALPHAVANTAGE_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
+          echo "  实时源优先级: ${REALTIME_SOURCE_PRIORITY:-自动}"
           if [ -n "$LONGBRIDGE_APP_KEY" ] && [ -n "$LONGBRIDGE_APP_SECRET" ] && [ -n "$LONGBRIDGE_ACCESS_TOKEN" ]; then
             echo "  Longbridge: ✅ 已配置（Legacy API Key）"
           elif [ -n "$LONGBRIDGE_OAUTH_CLIENT_ID" ] || { [ -n "$LONGBRIDGE_APP_KEY" ] && [ -z "$LONGBRIDGE_ACCESS_TOKEN" ]; }; then
@@ -504,13 +548,27 @@ jobs:
             echo "⚡ 已启用强制运行模式（跳过交易日检查）"
           fi
 
+          SINGLE_NOTIFY_ARG=""
+          case "${SINGLE_STOCK_NOTIFY,,}" in
+            1|true|yes|on)
+              SINGLE_NOTIFY_ARG="--single-notify"
+              echo "📣 已启用单股推送模式"
+              ;;
+          esac
+
           # 执行分析
           if [ "$MODE" = "market-only" ]; then
             python main.py --market-review $FORCE_RUN_ARG
           elif [ "$MODE" = "stocks-only" ]; then
-            python main.py --no-market-review $FORCE_RUN_ARG
+            python main.py --no-market-review $FORCE_RUN_ARG $SINGLE_NOTIFY_ARG
+          elif [ "$MODE" = "test-notify" ]; then
+            TEST_STOCK="${{ github.event.inputs.test_stock }}"
+            if [ -z "$TEST_STOCK" ]; then
+              TEST_STOCK="${STOCK_LIST%%,*}"
+            fi
+            python main.py --test-notify --stocks "$TEST_STOCK"
           else
-            python main.py $FORCE_RUN_ARG
+            python main.py $FORCE_RUN_ARG $SINGLE_NOTIFY_ARG
           fi
       
       - name: 上传分析报告
